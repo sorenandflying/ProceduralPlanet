@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CS77 Procedural Planet Generator Plus</title>
+  <style>
+    body { margin: 0; }
+    canvas{ width: 100%; height: 100%; }
+  </style>
+<body>
+  <script src="three.js-master/build/three.min.js"></script>
+  <script src="js/makeSphere.js"></script>
+  <script src="js/editSurface.js"></script>
+  <script src="js/libs/dat.gui.min.js"></script>
+  <script src="js/libs/controls.js"></script>
+
+  <script>
+
+    var scene, camera, renderer;
+    var gui, controls;
+    var meshes = [];
+    var params = {
+      updateNeeded : [true, true, true],
+      settings : [false, false, false],
+      intensities : [0.01, 0.01, 0.1],
+      ir : false,
+      ir_intensity: 0.01,
+      sr : false,
+      sr_intensity: 0.01,
+      wn : false,
+      wn_intensity: 0.1,
+      apply: function(){
+        modelNeedsUpdate = true;
+      },
+      newScene: function(){
+        clearScene();
+        initPlanet();
+      },
+      clear: function(){
+        clearScene();
+      },
+      updateElement: function(element){
+        this.updateNeeded[element] = true;
+        this.settings = [this.ir, this.sr, this.wn];
+        this.intensities = [this.ir_intensity, this.sr_intensity, this.wn_intensity];
+        modelNeedsUpdate = true;
+      }
+    };
+    var textures = [];
+    var settings = [];
+    var scalars = [[],[],[]];
+    var intensities = [0,0,0];
+    var sphere;
+    var modelNeedsUpdate = false;
+    initScene();
+    initGui();
+    animate();
+
+    function initGui(){
+      gui = new dat.GUI();
+
+      gui.add( params, 'ir', 0.0, .10).name('Interval Randomness').onChange(function(){ params.updateElement(0);} );
+      gui.add( params, 'ir_intensity', 0.0, .10).name('IR Intensity').onChange(function(){ params.updateElement(0);} );
+      gui.add( params, 'sr', false).name('Spectrum Randomness').onChange(function(){ params.updateElement(1);} );
+      gui.add( params, 'sr_intensity', 0.0, .10).name('SR Intensity').onChange(function(){ params.updateElement(1);} );
+      gui.add( params, 'wn', false).name('Worley Noise').onChange(function(){ params.updateElement(2);} );
+      gui.add( params, 'wn_intensity', 0.0, 1.0).name('WN Intensity').onChange(function(){ params.updateElement(2);} );
+      gui.add( params, 'newScene');
+      gui.add( params, 'clear');
+      gui.open();
+    }
+
+    function initScene(){
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      // (FOV, aspect, near clipping, far clipping)
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.z = 5;
+
+      renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      initLighting();
+      sphere = getSphere1(5,2);
+      //initPlanet();
+    }
+
+    function animate(){
+      requestAnimationFrame(animate);
+      for(var i = 0; i < meshes.length; i++){
+        // console.log(mesh);
+        // mesh.rotation.x += .003;
+        //meshes[i].rotation.y += .005;
+
+        if(modelNeedsUpdate){
+          updateModel();
+          modelNeedsUpdate = false;
+        }
+      }
+      renderer.render(scene, camera);
+    }
+
+    function initLighting(){
+      var ambient = new THREE.AmbientLight(0x555555);
+      scene.add(ambient);
+      var point1 = new THREE.PointLight(0xffffff, 1, 0, 2);
+      point1.position.set(50, 50, 50);
+      scene.add(point1);
+    }
+
+    function initPlanet(){
+      initTextures(sphere.vertices);
+      var roughLand = applyTextures(sphere.vertices);
+      var landMesh = getMesh(roughLand, sphere.faces);
+      meshes.push(landMesh);
+      scene.add(landMesh);
+    }
+
+    function updateModel(){
+      var newVertices = applyTextures(sphere.vertices);
+
+      var newMesh = getMesh(newVertices, sphere.faces);
+      scene.remove(meshes[0]);
+      scene.add(newMesh);
+      meshes[0] = newMesh;
+    }
+
+    function initTextures(sphereVertices){
+      scalars[0] = initIntervalRoughness(sphereVertices);
+      scalars[1] = initSpectrumRoughness(sphereVertices);
+      //scalars[2] = initWorleyNoise(sphereVertices);
+      //scalars.push(worleyNoise(sphereVertices));
+      scalars[2] = initWorleyNoise1(sphereVertices);
+      //console.log("Scalars:");
+      //console.log(scalars);
+
+      // console.log("Worley Testers");
+      // var randPoints = initWorleyNoisePoints();
+      // console.log(randPoints);
+      // var worley = initWorleyNoise1(sphereVertices);
+      // console.log(worley);
+      // var randPoints = initWorleyNoise1();
+      // scalars[2] = initWorleyNoise2(sphereVertices, randPoints);
+    }
+
+
+    function applyTextures(planetVertices){
+      //console.log("Settings");
+      //console.log(params.settings);
+      var newVertices = [];
+      for(var i = 0; i < planetVertices.length; i++){
+        newVertices.push(planetVertices[i].clone());
+      }
+      for(var i = 0; i < scalars.length; i++){
+        if(params.settings[i]){
+          newVertices = applyTexture(newVertices, scalars[i], params.intensities[i]);
+        }
+        else{
+          newVertices = newVertices;
+        }
+      }
+      return newVertices;
+    }
+
+    function getMesh(vertices, faces, colors = [],
+      material = new THREE.MeshLambertMaterial({vertexColors : THREE.FaceColors}))
+      {
+      // material.wireframe = true;
+      var geometry = new THREE.Geometry();
+      geometry.vertices = vertices;
+      geometry.faces = faces;
+
+      // Updates colors if needed
+      for(var i = 0; i < colors.length; i++){
+        if (faces.length >= i){
+          break;
+        }
+        faces[i].color = colors[i];
+      }
+
+      geometry.computeBoundingSphere();
+      geometry.computeFaceNormals();
+      geometry.colorsNeedUpdate = true;
+
+      var mesh = new THREE.Mesh(geometry, material);
+      return mesh;
+    }
+
+    function clearScene(){
+      for (i = 0; i < meshes.length; i++){
+        scene.remove(meshes[i]);
+      }
+      meshes = [];
+    }
+
+  </script>
+</body>
+</head>
