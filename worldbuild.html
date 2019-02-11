@@ -12,45 +12,62 @@
   <script src="js/makeSphere.js"></script>
   <script src="js/editSurface.js"></script>
   <script src="js/libs/dat.gui.min.js"></script>
-  <script src="js/libs/controls.js"></script>
+  <script src="js/libs/OrbitControls.js"></script>
 
   <script>
 
     var scene, camera, renderer;
     var gui, controls;
-    var meshes = [];
+    var landMesh, waterMesh;
     var params = {
       updateNeeded : [true, true, true],
       settings : [false, false, false],
-      intensities : [0.01, 0.01, 0.1],
-      ir : false,
-      ir_intensity: 0.01,
-      sr : false,
-      sr_intensity: 0.01,
-      wn : false,
-      wn_intensity: 0.1,
-      apply: function(){
-        modelNeedsUpdate = true;
-      },
+      intensities : [0.01, 0.1, 0.1],
+      ir : false, sr : false, wn : false,
+      ir_intensity: 0.01, sr_intensity: 0.01, wn_intensity: 0.1,
+      landColor_red : 0x88, landColor_green : 0x88, landColor_blue : 0x88,
+      waterOn: false,
+      waterPercentage : .05,
+      waterColor_red : 0x00, waterColor_green : 0x11, waterColor_blue : 0x88,
       newScene: function(){
         clearScene();
         initPlanet();
+        if(this.waterOn){
+          updateWaterModel(this.waterPercentage);
+        }
       },
       clear: function(){
         clearScene();
       },
-      updateElement: function(element){
-        this.updateNeeded[element] = true;
+      updateElement: function(element, updateColor = false){
+        this.updateNeeded[element] = ! updateColor;
         this.settings = [this.ir, this.sr, this.wn];
         this.intensities = [this.ir_intensity, this.sr_intensity, this.wn_intensity];
-        modelNeedsUpdate = true;
+        if(updateColor){
+          var landColorNum = (Math.floor(this.landColor_red) * 0x100 + Math.floor(this.landColor_green)) * 0x100 + Math.floor(this.landColor_blue);
+          var waterColorNum = (Math.floor(this.waterColor_red) * 0x100 + Math.floor(this.waterColor_green)) * 0x100 + Math.floor(this.waterColor_blue)
+          updateLandModel(landColorNum);
+          if(this.waterOn){updateWaterModel(this.waterPercentage, waterColorNum);}
+        }
+        else if (element < 3){
+          updateLandModel();
+
+        }
+        if(this.waterOn){updateWaterModel(this.waterPercentage);}
+      },
+      turnWaterOnOff: function(){
+        if(this.waterOn){
+          scene.add(waterMesh);
+        } else {
+          scene.remove(waterMesh);
+        }
       }
     };
     var textures = [];
     var settings = [];
     var scalars = [[],[],[]];
     var intensities = [0,0,0];
-    var sphere;
+    var landSphere, waterSphere;
     var modelNeedsUpdate = false;
     initScene();
     initGui();
@@ -59,12 +76,28 @@
     function initGui(){
       gui = new dat.GUI();
 
-      gui.add( params, 'ir', 0.0, .10).name('Interval Randomness').onChange(function(){ params.updateElement(0);} );
-      gui.add( params, 'ir_intensity', 0.0, .10).name('IR Intensity').onChange(function(){ params.updateElement(0);} );
+      gui.add( params, 'ir', false).name('Interval Randomness').onChange(function(){ params.updateElement(0);} );
+      gui.add( params, 'ir_intensity', 0.0, 0.25).name('IR Intensity').onChange(function(){ params.updateElement(0);} );
+      // gui.add( params, 'ir_intensity', 0.0, 1.0).name('IR Intensity').onChange(function(){ params.updateElement(0);} );
       gui.add( params, 'sr', false).name('Spectrum Randomness').onChange(function(){ params.updateElement(1);} );
-      gui.add( params, 'sr_intensity', 0.0, .10).name('SR Intensity').onChange(function(){ params.updateElement(1);} );
+      gui.add( params, 'sr_intensity', 0.0, 1.0).name('SR Intensity').onChange(function(){ params.updateElement(1);} );
+      // gui.add( params, 'sr_intensity', 0.0, 1.0).name('SR Intensity').onChange(function(){ params.updateElement(1);} );
       gui.add( params, 'wn', false).name('Worley Noise').onChange(function(){ params.updateElement(2);} );
       gui.add( params, 'wn_intensity', 0.0, 1.0).name('WN Intensity').onChange(function(){ params.updateElement(2);} );
+
+      var landColor = gui.addFolder('Land Color');
+      landColor.add(params, 'landColor_red', 0x00, 0xff).name('Red').onChange(function(){params.updateElement(0, true);} );
+      landColor.add(params, 'landColor_green', 0x00, 0xff).name('Green').onChange(function(){params.updateElement(0, true);} );
+      landColor.add(params, 'landColor_blue', 0x00, 0xff).name('Blue').onChange(function(){params.updateElement(0, true);} );
+
+      var waterParams = gui.addFolder('Water Params');
+      waterParams.add(params, 'waterOn', false).name('On/Off').onChange(function(){params.turnWaterOnOff()});
+      waterParams.add(params, 'waterColor_red', 0x00, 0xff).name('Red').onChange(function(){params.updateElement(0, true);} );
+      waterParams.add(params, 'waterColor_green', 0x00, 0xff).name('Green').onChange(function(){params.updateElement(0, true);} );
+      waterParams.add(params, 'waterColor_blue', 0x00, 0xff).name('Blue').onChange(function(){params.updateElement(0, true);} );
+      waterParams.add(params, 'waterPercentage', 0, 1.0).name('Percent Water').onChange(function(){params.updateElement(3, true);} );
+
+
       gui.add( params, 'newScene');
       gui.add( params, 'clear');
       gui.open();
@@ -73,6 +106,7 @@
     function initScene(){
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x000000);
+
       // (FOV, aspect, near clipping, far clipping)
       camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
       camera.position.z = 5;
@@ -81,67 +115,83 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.minDistance = 0;
+      controls.maxDistance = 20;
+      controls.maxPolarAngle = Math.PI / 2;
+
       initLighting();
-      sphere = getSphere1(5,2);
+      landSphere = getSphere1(5,2);
+      waterSphere = getSphere1(5,2);
       //initPlanet();
     }
 
     function animate(){
       requestAnimationFrame(animate);
-      for(var i = 0; i < meshes.length; i++){
-        // console.log(mesh);
-        // mesh.rotation.x += .003;
-        //meshes[i].rotation.y += .005;
-
-        if(modelNeedsUpdate){
-          updateModel();
-          modelNeedsUpdate = false;
-        }
-      }
       renderer.render(scene, camera);
     }
 
     function initLighting(){
       var ambient = new THREE.AmbientLight(0x555555);
       scene.add(ambient);
-      var point1 = new THREE.PointLight(0xffffff, 1, 0, 2);
+      var point1 = new THREE.PointLight(0xffffff, .8, 0, 2);
       point1.position.set(50, 50, 50);
       scene.add(point1);
+      var point2 = new THREE.PointLight(0xffffff, .25, 0, 2);
+      point2.position.set(-50, -50, -50);
+      scene.add(point2);
     }
 
     function initPlanet(){
-      initTextures(sphere.vertices);
-      var roughLand = applyTextures(sphere.vertices);
-      var landMesh = getMesh(roughLand, sphere.faces);
-      meshes.push(landMesh);
+      initTextures(landSphere.vertices);
+      var roughLand = applyTextures(landSphere.vertices);
+      landMesh = getMesh(roughLand, landSphere.faces);
+      waterMesh = getMesh(waterSphere.vertices, waterSphere.faces);
       scene.add(landMesh);
+      //scene.add(waterMesh);
     }
 
-    function updateModel(){
-      var newVertices = applyTextures(sphere.vertices);
+    function updateLandModel(landBaseColor = -1){
+      var newLandVertices = applyTextures(landSphere.vertices);
+      var landBase = [];
+      if (landBaseColor >= 0){
+        landBase = getBaseColor(landMesh, landBaseColor);
+      }
+      //console.log(landBase);
+      var newLandMesh = getMesh(newLandVertices, landSphere.faces, landBase);
+      //console.log(newMesh.geometry.faces[0].color);
+      scene.remove(landMesh);
+      scene.add(newLandMesh);
+      landMesh = newLandMesh;
+    }
 
-      var newMesh = getMesh(newVertices, sphere.faces);
-      scene.remove(meshes[0]);
-      scene.add(newMesh);
-      meshes[0] = newMesh;
+    function updateWaterModel(waterPercentage, waterColor = -1, applyTexture = false){
+      // var waterRadius = landMin + waterPercentage * (landMax - landMin)
+      var waterRadius = 2 + waterPercentage;
+      var newWaterVertices = getSphere1(5, waterRadius).vertices;
+      if (applyTexture){
+
+      }
+      var waterBase = [];
+      if (waterColor >= 0){
+        waterBase = getBaseColor(waterMesh, waterColor);
+      }
+      var newWaterMesh = getMesh(newWaterVertices, waterSphere.faces, waterBase);
+      scene.remove(waterMesh);
+      scene.add(newWaterMesh);
+      waterMesh = newWaterMesh;
+
     }
 
     function initTextures(sphereVertices){
-      scalars[0] = initIntervalRoughness(sphereVertices);
-      scalars[1] = initSpectrumRoughness(sphereVertices);
-      //scalars[2] = initWorleyNoise(sphereVertices);
-      //scalars.push(worleyNoise(sphereVertices));
+      scalars[0] = initPerlinNoise(sphereVertices, initPerlinNoiseVectors(16));
+      scalars[1] = initPerlinNoise(sphereVertices, initPerlinNoiseVectors(4));
       scalars[2] = initWorleyNoise1(sphereVertices);
-      //console.log("Scalars:");
-      //console.log(scalars);
 
-      // console.log("Worley Testers");
-      // var randPoints = initWorleyNoisePoints();
-      // console.log(randPoints);
-      // var worley = initWorleyNoise1(sphereVertices);
-      // console.log(worley);
-      // var randPoints = initWorleyNoise1();
-      // scalars[2] = initWorleyNoise2(sphereVertices, randPoints);
+      // scalars[0] = initWorleyNoise1(sphereVertices, initWorleyNoisePoints(50));
+      // scalars[1] = initWorleyNoise1(sphereVertices, initWorleyNoisePoints(250));
+      // scalars[2] = initWorleyNoise1(sphereVertices, initWorleyNoisePoints(500));
+      //console.log(scalars);
     }
 
 
@@ -166,17 +216,23 @@
     function getMesh(vertices, faces, colors = [],
       material = new THREE.MeshLambertMaterial({vertexColors : THREE.FaceColors}))
       {
-      // material.wireframe = true;
+      //console.log(colors);
+      //material.wireframe = true;
+      // if(colors.length > 0){
+      //   for()
+      // }
       var geometry = new THREE.Geometry();
       geometry.vertices = vertices;
       geometry.faces = faces;
 
       // Updates colors if needed
       for(var i = 0; i < colors.length; i++){
-        if (faces.length >= i){
+        if (faces.length <= i){
           break;
         }
         faces[i].color = colors[i];
+        // console.log(colors[i]);
+        // console.log(faces[i])
       }
 
       geometry.computeBoundingSphere();
@@ -188,10 +244,16 @@
     }
 
     function clearScene(){
-      for (i = 0; i < meshes.length; i++){
-        scene.remove(meshes[i]);
+      scene.remove(landMesh);
+      scene.remove(waterMesh);
+    }
+
+    function getBaseColor(mesh, color){
+      var colors = [];
+      for (f in mesh.geometry.faces){
+        colors.push(new THREE.Color(color));
       }
-      meshes = [];
+      return colors;
     }
 
   </script>
