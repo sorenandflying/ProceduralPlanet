@@ -204,7 +204,7 @@
       }
       for(var i = 0; i < scalars.length; i++){
         if(params.settings[i]){
-          newVertices = applyTexture(newVertices, scalars[i], params.intensities[i]);
+          newVertices = applyTexture(newVertices, scalars[i], params.intensities[i]).vertices;
         }
         else{
           newVertices = newVertices;
